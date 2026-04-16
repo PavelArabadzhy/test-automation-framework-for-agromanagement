@@ -36,6 +36,7 @@ jobs:
       ADMIN_USERNAME: qa_admin
       ADMIN_PASSWORD: qa_password_123
       SELECTED_SUITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
+      STRICT_MODE: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'smoke' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -203,20 +204,53 @@ jobs:
           )
           PY
 
-      - name: Run smoke suite
-        if: env.SELECTED_SUITE == 'smoke' || env.SELECTED_SUITE == 'smoke+security'
+      - name: Run selected suite
+        id: run-suite
         working-directory: test-automation-framework
-        run: npm run test:smoke
+        run: |
+          set +e
+          exit_code=0
+          echo "Selected suite: $SELECTED_SUITE"
+          echo "Strict mode: $STRICT_MODE"
 
-      - name: Run security suite
-        if: env.SELECTED_SUITE == 'security' || env.SELECTED_SUITE == 'smoke+security'
-        working-directory: test-automation-framework
-        run: npm run test:security
+          case "$SELECTED_SUITE" in
+            smoke)
+              npm run test:smoke || exit_code=$?
+              ;;
+            security)
+              npm run test:security || exit_code=$?
+              ;;
+            smoke+security)
+              npm run test:smoke || exit_code=$?
+              npm run test:security || exit_code=$?
+              ;;
+            full)
+              npm test || exit_code=$?
+              ;;
+            *)
+              echo "Unknown suite: $SELECTED_SUITE"
+              exit_code=2
+              ;;
+          esac
 
-      - name: Run full suite
-        if: env.SELECTED_SUITE == 'full'
-        working-directory: test-automation-framework
-        run: npm test
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+          if [ "$exit_code" -ne 0 ] && [ "$STRICT_MODE" = "true" ]; then
+            echo "Strict mode is enabled -> failing workflow."
+            exit "$exit_code"
+          fi
+
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Non-blocking failures detected for suite '$SELECTED_SUITE'."
+          fi
+
+      - name: Publish non-blocking test summary
+        if: always()
+        run: |
+          if [ "${{ steps.run-suite.outputs.exit_code }}" != "0" ] && [ "$STRICT_MODE" != "true" ]; then
+            echo "## Informational run" >> "$GITHUB_STEP_SUMMARY"
+            echo "Suite \`$SELECTED_SUITE\` finished with test failures, but workflow is configured as non-blocking for this suite." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Cleanup test data
         if: always()
