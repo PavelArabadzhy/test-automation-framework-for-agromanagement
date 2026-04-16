@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="${field.id} != null ? 'Редагувати поле' : 'Нове поле'"></title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet"/>
+    <style>
+        html, body { height: 100%; }
+        body { display: flex; flex-direction: column; }
+        .main-content { flex: 1; }
+    </style>
+</head>
+<body class="bg-light">
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-success">
+    <div class="container">
+        <a class="navbar-brand" th:href="@{/}">AgroManagement</a>
+    </div>
+</nav>
+
+<!-- Main content -->
+<div class="main-content container py-5">
+    <!-- Кнопка на головну -->
+    <a th:href="@{/}" class="btn btn-outline-secondary mb-4">
+        <i class="bi bi-house"></i> Головна
+    </a>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <h2 class="mb-4" th:text="${field.id} != null ? 'Редагувати поле' : 'Нове поле'"></h2>
+            <form th:action="@{/fields/save}" th:object="${field}" method="post">
+                <input type="hidden" th:field="*{id}"/>
+                <div class="mb-3">
+                    <label class="form-label">Назва</label>
+                    <input type="text" class="form-control" th:field="*{name}" required/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Площа (га)</label>
+                    <input type="number" step="0.01" class="form-control" th:field="*{area}" required/>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Ферма</label>
+                    <select class="form-select" th:field="*{farm.id}" required>
+                        <option th:each="f : ${farms}"
+                                th:value="${f.id}"
+                                th:text="${f.name}">
+                        </option>
+                    </select>
+                </div>
+                <div class="d-flex mt-4">
+                    <button type="submit" class="btn btn-success me-2">
+                        <i class="bi bi-save"></i> Зберегти
+                    </button>
+                    <a th:href="@{/fields}" class="btn btn-secondary me-2">
+                        <i class="bi bi-list"></i> До списку
+                    </a>
+                    <a th:href="@{/}" class="btn btn-outline-secondary">
+                        <i class="bi bi-house"></i> Головна
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Sticky footer -->
+<footer class="bg-white text-center py-3 border-top">
+    <small>© 2025 AgroManagement</small>
+</footer>
+
+</body>
+</html>

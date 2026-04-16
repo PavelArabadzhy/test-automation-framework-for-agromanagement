@@ -1,0 +1,28 @@
+{
+  "name": "test-automation-framework",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright + TypeScript test automation framework for AgroManagement",
+  "scripts": {
+    "test": "playwright test",
+    "test:clean": "playwright test; EXIT_CODE=$?; npm run cleanup:data; exit $EXIT_CODE",
+    "test:ui": "playwright test --project=ui",
+    "test:api": "playwright test --project=api",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:security": "playwright test --grep @security",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "cleanup:data": "ts-node scripts/cleanupTestData.ts",
+    "report:open": "playwright show-report",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^22.8.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

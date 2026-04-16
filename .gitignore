@@ -1,0 +1,10 @@
+.DS_Store
+.idea/
+.pydeps/
+
+# Local reports and temporary files
+*.log
+**/*.tmp
+
+# Personal practice/report artifacts (not part of source code)
+преддипломна-практика-файли/
