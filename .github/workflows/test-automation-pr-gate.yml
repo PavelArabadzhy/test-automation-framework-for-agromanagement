@@ -12,6 +12,9 @@ on:
       - "AgroManagement/**"
       - "test-automation-framework/**"
       - ".github/workflows/test-automation-pr-gate.yml"
+  schedule:
+    # Nightly run at 02:00 UTC
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       suite:
@@ -44,7 +47,7 @@ jobs:
       USER_PASSWORD: qa_password_123
       ADMIN_USERNAME: qa_admin
       ADMIN_PASSWORD: qa_password_123
-      SELECTED_SUITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
+      SELECTED_SUITE: ${{ github.event_name == 'schedule' && 'full' || github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
       STRICT_MODE: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'smoke' }}
     steps:
       - name: Checkout
