@@ -43,21 +43,57 @@ jobs:
         working-directory: test-automation-framework
         run: npx playwright install --with-deps chromium
 
-      - name: Build and start application stack
+      - name: Build and start infrastructure
         working-directory: AgroManagement
-        run: docker compose up -d --build
+        run: docker compose up -d --build mysql keycloak
 
-      - name: Wait for application readiness
+      - name: Wait for MySQL
+        working-directory: AgroManagement
         run: |
           for i in {1..60}; do
-            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login || true)"
-            if [ "$status" = "200" ]; then
-              echo "Application is ready"
+            if docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -proot --silent; then
+              echo "MySQL is ready"
               exit 0
             fi
             sleep 5
           done
+          echo "MySQL did not become ready in time"
+          exit 1
+
+      - name: Wait for Keycloak
+        working-directory: AgroManagement
+        run: |
+          for i in {1..120}; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081 || true)"
+            if [ "$status" = "200" ] || [ "$status" = "302" ]; then
+              echo "Keycloak is ready with status $status"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Keycloak did not become ready in time"
+          exit 1
+
+      - name: Start application container
+        working-directory: AgroManagement
+        run: docker compose up -d app
+
+      - name: Wait for application readiness
+        working-directory: AgroManagement
+        run: |
+          for i in {1..120}; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login || true)"
+            if [ "$status" = "200" ] || [ "$status" = "302" ]; then
+              echo "Application is ready with status $status"
+              exit 0
+            fi
+
+            app_state="$(docker compose ps app --format json 2>/dev/null || true)"
+            echo "Attempt $i: /login status=$status app_state=${app_state:-unavailable}"
+            sleep 5
+          done
           echo "Application did not become ready in time"
+          docker compose logs --no-color app mysql keycloak
           exit 1
 
       - name: Seed roles in database
