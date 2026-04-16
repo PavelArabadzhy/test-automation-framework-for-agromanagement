@@ -114,10 +114,23 @@ jobs:
           import re
           import urllib.parse
           import urllib.request
+          import urllib.error
           import http.cookiejar
           import subprocess
+          from html import unescape
 
           BASE = "http://127.0.0.1:8080"
+
+          def extract_csrf(html: str) -> str | None:
+              patterns = [
+                  r'name=["\']_csrf["\'][^>]*value=["\']([^"\']+)["\']',
+                  r'value=["\']([^"\']+)["\'][^>]*name=["\']_csrf["\']',
+              ]
+              for pattern in patterns:
+                  match = re.search(pattern, html, flags=re.IGNORECASE)
+                  if match:
+                      return unescape(match.group(1))
+              return None
 
           def register_user(username: str, password: str, email: str) -> None:
               jar = http.cookiejar.CookieJar()
@@ -126,10 +139,14 @@ jobs:
               with opener.open(f"{BASE}/register") as resp:
                   html = resp.read().decode("utf-8", errors="ignore")
 
-              match = re.search(r'name=\"_csrf\"\\s+value=\"([^\"]+)\"', html)
-              if not match:
-                  raise RuntimeError("Could not find CSRF token on /register page")
-              csrf = match.group(1)
+              csrf = extract_csrf(html)
+              if not csrf:
+                  # Some template/rendering variants may expose CSRF only on /login.
+                  with opener.open(f"{BASE}/login") as login_resp:
+                      login_html = login_resp.read().decode("utf-8", errors="ignore")
+                  csrf = extract_csrf(login_html)
+              if not csrf:
+                  raise RuntimeError("Could not find CSRF token on /register or /login pages")
 
               body = urllib.parse.urlencode({
                   "username": username,
@@ -144,7 +161,13 @@ jobs:
                   headers={"Content-Type": "application/x-www-form-urlencoded"},
                   method="POST",
               )
-              opener.open(request).read()
+              try:
+                  opener.open(request).read()
+              except urllib.error.HTTPError as err:
+                  # Re-runs may attempt to register the same user if previous run partially succeeded.
+                  if err.code in (400, 409):
+                      return
+                  raise
 
           register_user("qa_user", "qa_password_123", "qa_user@example.com")
           register_user("qa_admin", "qa_password_123", "qa_admin@example.com")
