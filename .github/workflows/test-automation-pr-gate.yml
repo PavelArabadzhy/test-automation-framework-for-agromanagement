@@ -13,6 +13,17 @@ on:
       - "test-automation-framework/**"
       - ".github/workflows/test-automation-pr-gate.yml"
   workflow_dispatch:
+    inputs:
+      suite:
+        description: "Select test suite to run"
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - security
+          - smoke+security
+          - full
 
 jobs:
   smoke:
@@ -24,6 +35,7 @@ jobs:
       USER_PASSWORD: qa_password_123
       ADMIN_USERNAME: qa_admin
       ADMIN_PASSWORD: qa_password_123
+      SELECTED_SUITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -192,14 +204,30 @@ jobs:
           PY
 
       - name: Run smoke suite
+        if: env.SELECTED_SUITE == 'smoke' || env.SELECTED_SUITE == 'smoke+security'
         working-directory: test-automation-framework
         run: npm run test:smoke
+
+      - name: Run security suite
+        if: env.SELECTED_SUITE == 'security' || env.SELECTED_SUITE == 'smoke+security'
+        working-directory: test-automation-framework
+        run: npm run test:security
+
+      - name: Run full suite
+        if: env.SELECTED_SUITE == 'full'
+        working-directory: test-automation-framework
+        run: npm test
+
+      - name: Cleanup test data
+        if: always()
+        working-directory: test-automation-framework
+        run: npm run cleanup:data
 
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-artifacts
+          name: ${{ env.SELECTED_SUITE }}-artifacts
           path: |
             test-automation-framework/test-results
             test-automation-framework/playwright-report
