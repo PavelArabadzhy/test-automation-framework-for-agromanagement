@@ -1,4 +1,4 @@
-name: Test Automation PR Gate
+name: AgroManagement Autotests Pipeline
 
 on:
   pull_request:
@@ -31,7 +31,8 @@ permissions:
   id-token: write
 
 jobs:
-  smoke:
+  test-suite:
+    name: Run autotests
     runs-on: ubuntu-latest
     env:
       BASE_URL: http://127.0.0.1:8080
@@ -289,8 +290,9 @@ jobs:
         run: docker compose down -v
 
   deploy-report:
+    name: Publish Playwright report
     runs-on: ubuntu-latest
-    needs: smoke
+    needs: test-suite
     if: always() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     environment:
       name: github-pages
