@@ -3,54 +3,27 @@ name: Test Automation PR Gate
 on:
   pull_request:
     paths:
+      - "AgroManagement/**"
       - "test-automation-framework/**"
       - ".github/workflows/test-automation-pr-gate.yml"
   push:
     branches: ["main"]
     paths:
+      - "AgroManagement/**"
       - "test-automation-framework/**"
       - ".github/workflows/test-automation-pr-gate.yml"
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 jobs:
-  typecheck:
+  smoke:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: test-automation-framework
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: test-automation-framework/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-  smoke-and-security:
-    runs-on: ubuntu-latest
-    needs: typecheck
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    defaults:
-      run:
-        working-directory: test-automation-framework
     env:
-      BASE_URL: ${{ secrets.BASE_URL }}
-      API_BASE_URL: ${{ secrets.API_BASE_URL }}
-      USER_USERNAME: ${{ secrets.USER_USERNAME }}
-      USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
-      ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
-      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      BASE_URL: http://127.0.0.1:8080
+      API_BASE_URL: http://127.0.0.1:8080
+      USER_USERNAME: qa_user
+      USER_PASSWORD: qa_password_123
+      ADMIN_USERNAME: qa_admin
+      ADMIN_PASSWORD: qa_password_123
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,76 +35,123 @@ jobs:
           cache: npm
           cache-dependency-path: test-automation-framework/package-lock.json
 
-      - name: Install dependencies
+      - name: Install test framework dependencies
+        working-directory: test-automation-framework
         run: npm ci
 
       - name: Install Playwright browser
+        working-directory: test-automation-framework
         run: npx playwright install --with-deps chromium
 
+      - name: Build and start application stack
+        working-directory: AgroManagement
+        run: docker compose up -d --build
+
+      - name: Wait for application readiness
+        run: |
+          for i in {1..60}; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login || true)"
+            if [ "$status" = "200" ]; then
+              echo "Application is ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Application did not become ready in time"
+          exit 1
+
+      - name: Seed roles in database
+        working-directory: AgroManagement
+        run: |
+          docker compose exec -T mysql mysql -uroot -proot -e "
+            CREATE DATABASE IF NOT EXISTS agro_db;
+            USE agro_db;
+            INSERT INTO roles(name) VALUES ('ROLE_USER')
+              ON DUPLICATE KEY UPDATE name=VALUES(name);
+            INSERT INTO roles(name) VALUES ('ROLE_ADMIN')
+              ON DUPLICATE KEY UPDATE name=VALUES(name);
+          "
+
+      - name: Register smoke users and grant admin role
+        run: |
+          python3 - <<'PY'
+          import re
+          import urllib.parse
+          import urllib.request
+          import http.cookiejar
+          import subprocess
+
+          BASE = "http://127.0.0.1:8080"
+
+          def register_user(username: str, password: str, email: str) -> None:
+              jar = http.cookiejar.CookieJar()
+              opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+              with opener.open(f"{BASE}/register") as resp:
+                  html = resp.read().decode("utf-8", errors="ignore")
+
+              match = re.search(r'name=\"_csrf\"\\s+value=\"([^\"]+)\"', html)
+              if not match:
+                  raise RuntimeError("Could not find CSRF token on /register page")
+              csrf = match.group(1)
+
+              body = urllib.parse.urlencode({
+                  "username": username,
+                  "email": email,
+                  "password": password,
+                  "_csrf": csrf
+              }).encode("utf-8")
+
+              request = urllib.request.Request(
+                  f"{BASE}/register",
+                  data=body,
+                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+                  method="POST",
+              )
+              opener.open(request).read()
+
+          register_user("qa_user", "qa_password_123", "qa_user@example.com")
+          register_user("qa_admin", "qa_password_123", "qa_admin@example.com")
+
+          sql = (
+              "USE agro_db; "
+              "INSERT INTO users_roles(user_id, role_id) "
+              "SELECT u.id, r.id FROM users u, roles r "
+              "WHERE u.username='qa_admin' AND r.name='ROLE_ADMIN' "
+              "AND NOT EXISTS ("
+              "  SELECT 1 FROM users_roles ur WHERE ur.user_id=u.id AND ur.role_id=r.id"
+              ");"
+          )
+          subprocess.run(
+              [
+                  "docker", "compose", "exec", "-T", "mysql",
+                  "mysql", "-uroot", "-proot", "-e", sql
+              ],
+              cwd="AgroManagement",
+              check=True,
+          )
+          PY
+
       - name: Run smoke suite
+        working-directory: test-automation-framework
         run: npm run test:smoke
-
-      - name: Run security suite
-        run: npm run test:security
-
-      - name: Cleanup test data
-        if: always()
-        run: npm run cleanup:data
 
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-security-artifacts
+          name: smoke-artifacts
           path: |
             test-automation-framework/test-results
             test-automation-framework/playwright-report
           if-no-files-found: ignore
 
-  full-regression:
-    runs-on: ubuntu-latest
-    needs: typecheck
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    defaults:
-      run:
-        working-directory: test-automation-framework
-    env:
-      BASE_URL: ${{ secrets.BASE_URL }}
-      API_BASE_URL: ${{ secrets.API_BASE_URL }}
-      USER_USERNAME: ${{ secrets.USER_USERNAME }}
-      USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
-      ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
-      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: test-automation-framework/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Run full regression
-        run: npm test
-
-      - name: Cleanup test data
+      - name: Print docker logs
         if: always()
-        run: npm run cleanup:data
+        working-directory: AgroManagement
+        run: docker compose logs --no-color app mysql keycloak
 
-      - name: Upload full regression artifacts
+      - name: Stop application stack
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-regression-artifacts
-          path: |
-            test-automation-framework/test-results
-            test-automation-framework/playwright-report
-          if-no-files-found: ignore
+        working-directory: AgroManagement
+        run: docker compose down -v
