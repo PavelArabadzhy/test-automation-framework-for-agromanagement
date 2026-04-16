@@ -21,6 +21,9 @@ on:
         type: choice
         options:
           - smoke
+          - ui
+          - api
+          - regression
           - security
           - smoke+security
           - full
@@ -222,6 +225,15 @@ jobs:
           case "$SELECTED_SUITE" in
             smoke)
               npm run test:smoke || exit_code=$?
+              ;;
+            ui)
+              npm run test:ui || exit_code=$?
+              ;;
+            api)
+              npm run test:api || exit_code=$?
+              ;;
+            regression)
+              npx playwright test --grep @regression || exit_code=$?
               ;;
             security)
               npm run test:security || exit_code=$?
