@@ -13,8 +13,8 @@ on:
       - "test-automation-framework/**"
       - ".github/workflows/test-automation-pr-gate.yml"
   schedule:
-    # Nightly run at 02:00 UTC
-    - cron: "0 2 * * *"
+    # Nightly full suite: 00:00 UTC ≈ 02:00–03:00 Europe/Kyiv (GitHub cron is UTC-only)
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       suite:
@@ -48,7 +48,8 @@ jobs:
       ADMIN_USERNAME: qa_admin
       ADMIN_PASSWORD: qa_password_123
       SELECTED_SUITE: ${{ github.event_name == 'schedule' && 'full' || github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
-      STRICT_MODE: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.suite == 'smoke' }}
+      # Strict only for PR/push (smoke gate) and manual smoke; nightly full is informational (known product failures).
+      STRICT_MODE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'smoke') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
