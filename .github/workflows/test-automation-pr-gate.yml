@@ -1,0 +1,338 @@
+name: AgroManagement Autotests Pipeline
+
+on:
+  pull_request:
+    paths:
+      - "agro-management/**"
+      - "test-automation-framework/**"
+      - ".github/workflows/test-automation-pr-gate.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "agro-management/**"
+      - "test-automation-framework/**"
+      - ".github/workflows/test-automation-pr-gate.yml"
+  schedule:
+    # Nightly full suite: 00:00 UTC ≈ 02:00–03:00 Europe/Kyiv (GitHub cron is UTC-only)
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Select test suite to run"
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - ui
+          - api
+          - regression
+          - security
+          - smoke+security
+          - full
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  test-suite:
+    name: Run autotests
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: http://127.0.0.1:8080
+      API_BASE_URL: http://127.0.0.1:8080
+      USER_USERNAME: ${{ secrets.USER_USERNAME }}
+      USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
+      ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      SELECTED_SUITE: ${{ github.event_name == 'schedule' && 'full' || github.event_name == 'workflow_dispatch' && github.event.inputs.suite || 'smoke' }}
+      # Strict only for PR/push (smoke gate) and manual smoke; nightly full is informational (known product failures).
+      STRICT_MODE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'smoke') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required GitHub secrets
+        run: |
+          missing=0
+          for key in USER_USERNAME USER_PASSWORD ADMIN_USERNAME ADMIN_PASSWORD; do
+            if [ -z "${!key}" ]; then
+              echo "Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "One or more required secrets are missing."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: test-automation-framework/package-lock.json
+
+      - name: Install test framework dependencies
+        working-directory: test-automation-framework
+        run: npm ci
+
+      - name: Quality gate (typecheck)
+        working-directory: test-automation-framework
+        run: npm run typecheck
+
+      - name: Install Playwright browser
+        working-directory: test-automation-framework
+        run: npx playwright install --with-deps chromium
+
+      - name: Build and start infrastructure
+        working-directory: agro-management
+        run: docker compose up -d --build mysql keycloak
+
+      - name: Wait for MySQL
+        working-directory: agro-management
+        run: |
+          for i in {1..60}; do
+            if docker compose exec -T mysql mysqladmin ping -h 127.0.0.1 -uroot -proot --silent; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "MySQL did not become ready in time"
+          exit 1
+
+      - name: Wait for Keycloak
+        working-directory: agro-management
+        run: |
+          for i in {1..120}; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8081 || true)"
+            if [ "$status" = "200" ] || [ "$status" = "302" ]; then
+              echo "Keycloak is ready with status $status"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Keycloak did not become ready in time"
+          exit 1
+
+      - name: Start application container
+        working-directory: agro-management
+        run: docker compose up -d app
+
+      - name: Wait for application readiness
+        working-directory: agro-management
+        run: |
+          for i in {1..120}; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login || true)"
+            if [ "$status" = "200" ] || [ "$status" = "302" ]; then
+              echo "Application is ready with status $status"
+              exit 0
+            fi
+
+            app_state="$(docker compose ps app --format json 2>/dev/null || true)"
+            echo "Attempt $i: /login status=$status app_state=${app_state:-unavailable}"
+            sleep 5
+          done
+          echo "Application did not become ready in time"
+          docker compose logs --no-color app mysql keycloak
+          exit 1
+
+      - name: Seed roles in database
+        working-directory: agro-management
+        run: |
+          docker compose exec -T mysql mysql -uroot -proot -e "
+            CREATE DATABASE IF NOT EXISTS agro_db;
+            USE agro_db;
+            INSERT INTO roles(name) VALUES ('ROLE_USER')
+              ON DUPLICATE KEY UPDATE name=VALUES(name);
+            INSERT INTO roles(name) VALUES ('ROLE_ADMIN')
+              ON DUPLICATE KEY UPDATE name=VALUES(name);
+          "
+
+      - name: Register smoke users and grant admin role
+        run: |
+          python3 - <<'PY'
+          import re
+          import urllib.parse
+          import urllib.request
+          import urllib.error
+          import http.cookiejar
+          import subprocess
+          import os
+          from html import unescape
+
+          BASE = "http://127.0.0.1:8080"
+
+          def extract_csrf(html: str) -> str | None:
+              patterns = [
+                  r'name=["\']_csrf["\'][^>]*value=["\']([^"\']+)["\']',
+                  r'value=["\']([^"\']+)["\'][^>]*name=["\']_csrf["\']',
+              ]
+              for pattern in patterns:
+                  match = re.search(pattern, html, flags=re.IGNORECASE)
+                  if match:
+                      return unescape(match.group(1))
+              return None
+
+          def register_user(username: str, password: str, email: str) -> None:
+              jar = http.cookiejar.CookieJar()
+              opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+              with opener.open(f"{BASE}/register") as resp:
+                  html = resp.read().decode("utf-8", errors="ignore")
+
+              csrf = extract_csrf(html)
+              if not csrf:
+                  # Some template/rendering variants may expose CSRF only on /login.
+                  with opener.open(f"{BASE}/login") as login_resp:
+                      login_html = login_resp.read().decode("utf-8", errors="ignore")
+                  csrf = extract_csrf(login_html)
+              if not csrf:
+                  raise RuntimeError("Could not find CSRF token on /register or /login pages")
+
+              body = urllib.parse.urlencode({
+                  "username": username,
+                  "email": email,
+                  "password": password,
+                  "_csrf": csrf
+              }).encode("utf-8")
+
+              request = urllib.request.Request(
+                  f"{BASE}/register",
+                  data=body,
+                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+                  method="POST",
+              )
+              try:
+                  opener.open(request).read()
+              except urllib.error.HTTPError as err:
+                  # Re-runs may attempt to register the same user if previous run partially succeeded.
+                  if err.code in (400, 409):
+                      return
+                  raise
+
+          register_user("qa_user", os.environ["USER_PASSWORD"], "qa_user@example.com")
+          register_user("qa_admin", os.environ["ADMIN_PASSWORD"], "qa_admin@example.com")
+
+          sql = (
+              "USE agro_db; "
+              "INSERT INTO users_roles(user_id, role_id) "
+              "SELECT u.id, r.id FROM users u, roles r "
+              "WHERE u.username='qa_admin' AND r.name='ROLE_ADMIN' "
+              "AND NOT EXISTS ("
+              "  SELECT 1 FROM users_roles ur WHERE ur.user_id=u.id AND ur.role_id=r.id"
+              ");"
+          )
+          subprocess.run(
+              [
+                  "docker", "compose", "exec", "-T", "mysql",
+                  "mysql", "-uroot", "-proot", "-e", sql
+              ],
+              cwd="agro-management",
+              check=True,
+          )
+          PY
+
+      - name: Run selected suite
+        id: run-suite
+        working-directory: test-automation-framework
+        run: |
+          set +e
+          exit_code=0
+          echo "Selected suite: $SELECTED_SUITE"
+          echo "Strict mode: $STRICT_MODE"
+
+          case "$SELECTED_SUITE" in
+            smoke)
+              npm run test:smoke || exit_code=$?
+              ;;
+            ui)
+              npm run test:ui || exit_code=$?
+              ;;
+            api)
+              npm run test:api || exit_code=$?
+              ;;
+            regression)
+              npx playwright test --grep @regression || exit_code=$?
+              ;;
+            security)
+              npm run test:security || exit_code=$?
+              ;;
+            smoke+security)
+              npm run test:smoke || exit_code=$?
+              npm run test:security || exit_code=$?
+              ;;
+            full)
+              npm test || exit_code=$?
+              ;;
+            *)
+              echo "Unknown suite: $SELECTED_SUITE"
+              exit_code=2
+              ;;
+          esac
+
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+
+          if [ "$exit_code" -ne 0 ] && [ "$STRICT_MODE" = "true" ]; then
+            echo "Strict mode is enabled -> failing workflow."
+            exit "$exit_code"
+          fi
+
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Non-blocking failures detected for suite '$SELECTED_SUITE'."
+          fi
+
+      - name: Publish non-blocking test summary
+        if: always()
+        run: |
+          if [ "${{ steps.run-suite.outputs.exit_code }}" != "0" ] && [ "$STRICT_MODE" != "true" ]; then
+            echo "## Informational run" >> "$GITHUB_STEP_SUMMARY"
+            echo "Suite \`$SELECTED_SUITE\` finished with test failures, but workflow is configured as non-blocking for this suite." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Cleanup test data
+        if: always()
+        working-directory: test-automation-framework
+        run: npm run cleanup:data
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SELECTED_SUITE }}-artifacts
+          path: |
+            test-automation-framework/test-results
+            test-automation-framework/playwright-report
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report artifact for GitHub Pages
+        if: always() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: test-automation-framework/playwright-report
+
+      - name: Print docker logs
+        if: always()
+        working-directory: agro-management
+        run: docker compose logs --no-color app mysql keycloak
+
+      - name: Stop application stack
+        if: always()
+        working-directory: agro-management
+        run: docker compose down -v
+
+  deploy-report:
+    name: Publish Playwright report
+    runs-on: ubuntu-latest
+    needs: test-suite
+    if: always() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

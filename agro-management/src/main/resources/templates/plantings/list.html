@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Список посівів</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet"/>
+    <style>
+        html, body { height: 100%; }
+        body { display: flex; flex-direction: column; }
+        .main-content { flex: 1; }
+    </style>
+</head>
+<body class="bg-light">
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-success">
+    <div class="container">
+        <a class="navbar-brand" th:href="@{/}">AgroManagement</a>
+    </div>
+</nav>
+
+<!-- Main content -->
+<div class="main-content container py-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="m-0">Посіви</h1>
+        <div>
+            <a th:href="@{/}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-house"></i> Головна
+            </a>
+            <a th:href="@{/plantings/add}" class="btn btn-primary">
+                <i class="bi bi-calendar2-plus-fill"></i> Додати посів
+            </a>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+            <tr>
+                <th>ID</th>
+                <th>Поле</th>
+                <th>Культура</th>
+                <th>Дата посіву</th>
+                <th>Очікувана дата збору</th>
+                <th>Дії</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="planting : ${plantings}">
+                <td th:text="${planting.id}"></td>
+                <td th:text="${planting.field.name}"></td>
+                <td th:text="${planting.crop.name}"></td>
+                <td th:text="${planting.plantingDate}"></td>
+                <td th:text="${planting.expectedHarvestDate}"></td>
+                <td>
+                    <a th:href="@{'/plantings/edit/' + ${planting.id}}"
+                       class="btn btn-sm btn-warning me-1">
+                        <i class="bi bi-pencil-square"></i>
+                    </a>
+                    <a th:href="@{'/plantings/delete/' + ${planting.id}}"
+                       class="btn btn-sm btn-danger"
+                       onclick="return confirm('Видалити посів?');">
+                        <i class="bi bi-trash"></i>
+                    </a>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Sticky footer -->
+<footer class="bg-white text-center py-3 border-top">
+    <small>© 2025 AgroManagement</small>
+</footer>
+
+</body>
+</html>

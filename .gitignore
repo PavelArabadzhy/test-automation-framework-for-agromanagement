@@ -1,0 +1,6 @@
+# ideas settings
+.idea/
+
+# Local reports and temporary files
+*.log
+**/*.tmp

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="uk" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Редагування користувача</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"/>
+</head>
+<body class="bg-light">
+
+<div class="container py-5">
+    <div class="card mx-auto" style="max-width: 500px;">
+        <div class="card-body">
+            <h5 class="card-title mb-4">Редагувати користувача</h5>
+            <form th:action="@{|/admin/users/${userDto.userId}/edit|}"
+                  th:object="${userDto}"
+                  method="post">
+                <div class="mb-3">
+                    <label for="username" class="form-label">Логін</label>
+                    <input th:field="*{username}" id="username" class="form-control" required/>
+                </div>
+                <div class="mb-3">
+                    <label for="email" class="form-label">Електронна пошта</label>
+                    <input th:field="*{email}" id="email" type="email" class="form-control" required/>
+                </div>
+                <!-- optional: roles, password, etc. -->
+                <button type="submit" class="btn btn-success">Зберегти</button>
+                <a th:href="@{/admin/users}" class="btn btn-secondary ms-2">Скасувати</a>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
